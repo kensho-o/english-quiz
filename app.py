@@ -10,6 +10,9 @@ XLSX_PATH = Path("quiz.xlsx")
 QUESTIONS_PER_RUN = 10
 
 
+# =====================
+# データ定義
+# =====================
 @dataclass
 class QuizItem:
     id: str
@@ -28,6 +31,9 @@ def build_full_en(cloze_en: str, answer: str) -> str:
     return cloze_en.replace("＿", "_").replace("____", answer)
 
 
+# =====================
+# Excel 読み込み
+# =====================
 def load_items_from_xlsx(path: Path) -> List[QuizItem]:
     if not path.exists():
         raise FileNotFoundError("quiz.xlsx が見つかりません（app.pyと同じ階層に置いてください）")
@@ -59,6 +65,7 @@ def load_items_from_xlsx(path: Path) -> List[QuizItem]:
         answer = get(row, "answer")
         full_ja = get(row, "full_ja")
 
+        # id を数値化
         try:
             id_num = int(_id)
         except:
@@ -75,14 +82,27 @@ def load_items_from_xlsx(path: Path) -> List[QuizItem]:
             bad.append((_id, "full_ja が空です"))
             continue
 
-        items.append(QuizItem(_id, id_num, ja, cloze_en, answer, full_ja))
+        items.append(
+            QuizItem(
+                id=_id,
+                id_num=id_num,
+                ja=ja,
+                cloze_en=cloze_en,
+                answer=answer,
+                full_ja=full_ja,
+            )
+        )
 
     st.session_state["bad_rows"] = bad
     return items
 
 
+# =====================
+# クイズ初期化（ID範囲指定）
+# =====================
 def init_quiz(min_id: int, max_id: int):
     items = load_items_from_xlsx(XLSX_PATH)
+
     pool = [it for it in items if min_id <= it.id_num <= max_id]
 
     if len(pool) < QUESTIONS_PER_RUN:
@@ -92,6 +112,7 @@ def init_quiz(min_id: int, max_id: int):
         )
 
     quiz = random.sample(pool, QUESTIONS_PER_RUN)
+
     st.session_state.quiz = [asdict(q) for q in quiz]
     st.session_state.i = 0
     st.session_state.correct = 0
@@ -99,16 +120,19 @@ def init_quiz(min_id: int, max_id: int):
     st.session_state.skipped = 0
     st.session_state.phase = "question"
     st.session_state.last = None
-    st.session_state.user_input = ""
+    # NOTE: user_input はウィジェットが管理するので、ここでは触らない（エラー回避）
 
 
-# ===== UI =====
+# =====================
+# UI
+# =====================
 st.set_page_config(page_title="英単語クイズ", page_icon="📝")
 st.title("📝 英単語クイズ")
 
 if "phase" not in st.session_state:
     st.session_state.phase = "start"
 
+# ---- サイドバー ----
 with st.sidebar:
     st.header("出題範囲指定（ID）")
 
@@ -116,7 +140,8 @@ with st.sidebar:
     max_id = st.number_input("上限ID", min_value=1, value=int(st.session_state.get("max_id", 1000)), step=1, key="max_id")
 
     st.divider()
-    if st.button("最初から（リセット）"):
+
+    if st.button("リセット"):
         st.session_state.clear()
         st.rerun()
 
@@ -127,9 +152,11 @@ with st.sidebar:
                 st.write(f"- ID={_id}: {reason}")
 
 
+# ---- 開始画面 ----
 if st.session_state.phase == "start":
     st.write(f"ID **{min_id}〜{max_id}** の範囲から **10問ランダム出題**します。")
-    if st.button("▶️ スタート（10問）", type="primary"):
+
+    if st.button("▶️ スタート", type="primary"):
         try:
             init_quiz(int(min_id), int(max_id))
             st.rerun()
@@ -137,82 +164,85 @@ if st.session_state.phase == "start":
             st.error(str(e))
 
 
+# ---- 問題表示 ----
 elif st.session_state.phase == "question":
     quiz = st.session_state.quiz
     i = st.session_state.i
     q = quiz[i]
 
-    st.subheader(f"Q{i+1}/{QUESTIONS_PER_RUN}")
+    st.subheader(f"Q{i+1}/10")
     st.write(f"**日本語**：{q['ja']}")
     st.write(f"**英文**：{q['cloze_en']}")
 
+    # keyを付けて入力を保持（ただし同じ実行サイクルで上書きしない）
     user = st.text_input("空欄に入る語句（大小文字は無視）", key="user_input")
 
-    c1, c2 = st.columns(2)
+    col1, col2 = st.columns(2)
 
-    with c1:
-        if st.button("送信", type="primary"):
-            if user.strip() == "":
-                st.session_state.skipped += 1
-                is_skip = True
-                is_correct = False
-            else:
-                is_skip = False
-                is_correct = normalize(user) == normalize(q["answer"])
-                if is_correct:
-                    st.session_state.correct += 1
-                else:
-                    st.session_state.wrong += 1
-
-            st.session_state.last = {
-                "is_skip": is_skip,
-                "is_correct": is_correct,
-                "user": user,
-                "answer": q["answer"],
-                "full_en": build_full_en(q["cloze_en"], q["answer"]),
-                "full_ja": q["full_ja"],
-            }
-            st.session_state.phase = "feedback"
-            st.session_state.user_input = ""
-            st.rerun()
-
-    with c2:
-        if st.button("スキップ"):
+    if col1.button("送信", type="primary"):
+        if user.strip() == "":
             st.session_state.skipped += 1
-            st.session_state.last = {
-                "is_skip": True,
-                "is_correct": False,
-                "user": "",
-                "answer": q["answer"],
-                "full_en": build_full_en(q["cloze_en"], q["answer"]),
-                "full_ja": q["full_ja"],
-            }
-            st.session_state.phase = "feedback"
-            st.session_state.user_input = ""
-            st.rerun()
+            correct = False
+            is_skip = True
+        else:
+            is_skip = False
+            correct = normalize(user) == normalize(q["answer"])
+            if correct:
+                st.session_state.correct += 1
+            else:
+                st.session_state.wrong += 1
+
+        st.session_state.last = {
+            "is_skip": is_skip,
+            "correct": correct,
+            "user": user,
+            "answer": q["answer"],
+            "full_en": build_full_en(q["cloze_en"], q["answer"]),
+            "full_ja": q["full_ja"],
+        }
+        st.session_state.phase = "feedback"
+        st.rerun()
+
+    if col2.button("スキップ"):
+        st.session_state.skipped += 1
+        st.session_state.last = {
+            "is_skip": True,
+            "correct": False,
+            "user": "",
+            "answer": q["answer"],
+            "full_en": build_full_en(q["cloze_en"], q["answer"]),
+            "full_ja": q["full_ja"],
+        }
+        st.session_state.phase = "feedback"
+        st.rerun()
 
 
+# ---- 解答表示 ----
 elif st.session_state.phase == "feedback":
-    i = st.session_state.i
-    total = len(st.session_state.quiz)
     last = st.session_state.last
+    i = st.session_state.i
+    total = QUESTIONS_PER_RUN
 
     if last["is_skip"]:
         st.info("スキップ")
-    elif last["is_correct"]:
+    elif last["correct"]:
         st.success("正解")
     else:
         st.error("不正解")
-        st.write(f"あなた：`{last['user']}`")
-        st.write(f"正解：`{last['answer']}`")
+        if last["user"]:
+            st.write(f"あなたの解答：{last['user']}")
+        st.write(f"正解：{last['answer']}")
 
     st.divider()
-    st.write("**EN（全文）**")
+    st.write("**英文（全文）**")
     st.write(last["full_en"])
-    st.write("**JA（訳）**")
+    st.write("**日本語訳**")
     st.write(last["full_ja"])
 
     if st.button("次へ ▶️", type="primary"):
+        # ウィジェットの値は「次へ」でクリア（同一実行サイクルで上書きしないため）
+        st.session_state.user_input = ""
+
         st.session_state.i += 1
         if st.session_state.i >= total:
             st.session_state.phase = "done"
@@ -221,13 +251,15 @@ elif st.session_state.phase == "feedback":
         st.rerun()
 
 
+# ---- 結果 ----
 elif st.session_state.phase == "done":
     st.subheader("結果")
-    st.write(f"- 正解：{st.session_state.correct}")
-    st.write(f"- 不正解：{st.session_state.wrong}")
-    st.write(f"- スキップ：{st.session_state.skipped}")
-    st.write(f"- 合計：{len(st.session_state.quiz)}")
+    st.write(f"正解：{st.session_state.correct}")
+    st.write(f"不正解：{st.session_state.wrong}")
+    st.write(f"スキップ：{st.session_state.skipped}")
 
     if st.button("もう一回（別の10問）", type="primary"):
+        # 次回開始時に入力を空にしておく
+        st.session_state.user_input = ""
         st.session_state.phase = "start"
         st.rerun()
